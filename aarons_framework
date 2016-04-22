@@ -1,0 +1,325 @@
+#!/bin/sh
+#
+# aarons_framework
+#
+# Created by Aaron DeForest
+#
+
+# This configuration file describes what this script will actual do.
+__AF_KEY_PREFIX="_af_key_"
+
+##TODO: consider path, or variablizing the binaries we use, like dirname, and getopts.
+
+
+# A validator of functions.  Returns true (0) if it is, and false (1) if it is not.
+# Typical usage : 
+#
+#    if af_is_valid_function myfunction ; then
+#         myfunction params
+#    fi
+#
+af_is_valid_function()
+{
+    __af_ivf_test=`type "$1" 2>&1 | egrep ' is a function$| is a shell function$'`
+    if [ -n "${__af_ivf_test}" ] ; then return 0; fi
+    return 1
+}
+
+# A function for loading another module in a safe way.
+af_load_module()
+{
+    __af_sm_module="$1"
+    __af_sm_return_code=0
+
+    if [ -r "${__af_sm_module}" -a -n "`file ${__af_sm_module} | egrep 'executable shell script|text executable'`" ] ; then
+
+	. ${__af_sm_module}
+	`handle_exception $? "" "af_load_module - Module does not exist : ${__af_sm_module}"`
+    else
+	`handle_exception 2 "" "af_load_module - Module does not exist or is not a shell module : ${__af_sm_module}"`
+    fi
+
+    return 0
+}
+
+# Set the home directory
+af_set_hdir()
+{
+    __af_sh_hdir="$1"
+    if [ -n "${__af_sh_hdir}" -a -r "${__af_sh_hdir}" -a -d "${__af_sh_hdir}" ] ; then
+	__af_home_directory="${__af_sh_hdir}"
+	export __af_home_directory
+    else
+	`handle_exception 2 "" "af_set_hdir - Directory is not valid : ${__af_sh_hdir}."`
+    fi
+}
+
+
+# Get the current home directory
+af_get_hdir()
+{
+    echo "${__af_home_directory}"
+}
+
+
+# Get files absolute path.
+af_get_abspath()
+{
+    __af_ga_path="$1"
+    if [ -n "`echo ${__af_ga_path} | egrep '^[^/]'`" ] ; then
+	__af_ga_path=`af_get_hdir`"/${__af_ga_path}"
+    fi
+
+    echo "${__af_ga_path}"
+}
+
+
+# Set the debug level for the rest of this execution.
+af_set_debug()
+{
+    if af_is_valid_function af_is_debug ; then
+	log_msg "" "af_set_debug - Setting debug to $1"
+    fi
+
+    case "$1" in
+	[Ff]alse) af_is_debug() { return 1; } ;;
+	# Ideally this should only set Debug for true, but this 
+	# way we can handle bad input.
+	*) af_is_debug() { return 0; } ;;
+    esac
+}
+
+# Set the debug level, if it has not already been set.
+if ! af_is_valid_function af_is_debug ; then
+    af_set_debug false
+fi
+
+
+## af_start_framework $1
+#
+# This is the "main" function that start the program!
+#
+# $1: configuration file.
+#
+af_start_framework()
+{
+    if af_is_debug ; then log_msg "" "Starting aarons_framework using the configuration file : $1"; fi
+
+
+    # Set my home directory before continuing.
+    __af_sf_script_loc=`dirname $0`
+    if [ -n "`echo ${__af_sf_script_loc} | egrep '^[^/]'`" ] ; then
+	__af_sf_script_loc=`pwd`"/${__af_sf_script_loc}"
+    fi
+    af_set_hdir "${__af_sf_script_loc}"
+    `handle_exception $? "" "af_start_framework - Failed to initialize home directory.  Very unusual!"`
+
+
+    # Load in the configuration file so that we know what we are doing.
+    __af_load_configuration_file "$1"
+    `handle_exception $? "" "af_start_framework - Failed to load configuration file."`
+
+    if af_is_debug ; then log_msg "" "af_start_framework - framework loaded ${__af_load_configuration_file}"; fi
+
+    ##
+    # Start executing the program.
+    ##
+    
+    # Set any special variables that need setting ahead of time.
+    #### TODO: Allow the user to set the home directory from the configuration file.
+
+    # Loop through all the 
+    __af_sf_step_count=1
+    while [ 0 -eq 0 ] ; do
+	__af_sf_next="`af_get_property_value step${__af_sf_step_count}`"
+	if [ -z "${__af_sf_next}" ] ; then break ; fi
+	__af_interpret_command ${__af_sf_next}
+	`handle_exception $? "" "af_start_framework - Command failed : ${__af_sf_next}."`
+	__af_sf_step_count=`expr 1 + ${__af_sf_step_count}`
+    done
+}
+
+
+# This will run the command from the configuration file.
+# Very exciting!
+# Each part of the command should be separated by spaces.
+__af_interpret_command()
+{
+    __af_ic_command="$1"
+    shift
+    __af_ic_user_command="$1"
+    #export __af_ic_user_command
+    shift
+    __af_ic_user_vars="$@"
+    #export __af_ic_user_vars
+
+    if [ -z "${__af_ic_command}" -o -z "${__af_ic_user_command}" ] ; then
+	`handle_exception 1 "" "__af_interpret_command - Not a valid command : ${__af_ic_command}; or user command : ${__af_ic_user_command}."`
+    fi
+
+    case "${__af_ic_command}" in
+	module)
+	    __af_ic_mod="`af_get_abspath ${__af_ic_user_command}`"
+	    af_load_module "${__af_ic_mod}"
+	    `handle_exception $? "" "__af_interpret_command - Unable to load module : ${__af_ic_mod}."`
+	    ;;
+	function)
+	    af_is_valid_function ${__af_ic_user_command}
+	    `handle_exception $? "" "__af_interpret_command - Invalid Function : ${__af_ic_user_command}."`
+	    __af_ic_output="`${__af_ic_user_command} ${__af_ic_user_vars} 2>&1`"
+	    __af_ic_ecode=$?
+	    log_msg "" "__af_interpret_command - Function : ${__af_ic_user_command} ${__af_ic_user_vars}; output : ${__af_ic_output}."
+	    `handle_exception "${__af_ic_ecode}" "" "__af_interpret_command - Function failed : ${__af_ic_user_command} ${__af_ic_user_vars}."`
+	    ;;
+	script)
+	    __af_ic_script="`af_get_abspath ${__af_ic_user_command}`"
+	    __af_ic_output="`${__af_ic_script} ${__af_ic_user_vars} 2>&1`"
+	    __af_ic_ecode=$?
+	    log_msg "" "__af_interpret_command - Script : ${__af_ic_script} ${__af_ic_user_vars}; output : ${__af_ic_output}"
+	    `handle_exception "${__af_ic_ecode}" "" "__af_interpret_command - Script failed : ${__af_ic_user_command} ${__af_ic_user_vars}."`
+	    ;;
+	*)
+	    `handle_exception 2 "" "__af_interpret_command - I do not understand this command : ${__af_ic_command}."`
+	    ;;
+    esac
+}
+
+
+
+# This will load the configuration into the system.
+__af_load_configuration_file()
+{
+    __af_lcf_config_file="$1"
+    if [ -z "${__af_lcf_config_file}" ] ; then
+	`handle_exception 1 "" "__af_load_configuration_file - Configuration file parameter is null."`
+    fi
+
+    # Get the absolute path, if possible.
+    __af_lcf_config_file=`af_get_abspath "${__af_lcf_config_file}"`
+
+    if [ ! -r "${__af_lcf_config_file}" ] ; then
+	`handle_exception 2 "" "__af_load_configuration_file - Configuration file does not exist, or cannot read it : ${__af_lcf_config_file}."`
+    fi
+
+    if af_is_debug ; then log_msg "" "__af_load_configuration_file - Loading configuration from : ${__af_lcf_config_file}." ; fi
+    
+    # Read in the configuration file.
+    # While reading in the configuration file, try to elimitate all extra lines from processing.
+    __af_lcf_config="`sed -e 's/[#;].*//g' \"${__af_lcf_config_file}\" | tr '\t' ' ' | sed -e 's/^[ ]*//' | egrep -v '^$'`"
+    `handle_exception $? "" "__af_load_configuration_file - Failed to read file : ${__af_lcf_config_file}."`
+
+
+    # Load up all the configurations
+    # Loop through the items and load them.
+    __af_lcf_counter=1
+    __af_lcf_num_events=`echo "${__af_lcf_config}" | wc -l`
+    while [ "${__af_lcf_counter}" -le "${__af_lcf_num_events}" ] ; do
+	__af_lcf_next_prop=`echo "${__af_lcf_config}" | head -${__af_lcf_counter} | tail -1`
+
+	af_set_property "${__af_lcf_next_prop}"
+	`handle_exception $? "" "__af_load_configuration_file - Failed to load config line from : ${__af_lcf_config_file}."`
+	__af_lcf_counter=`expr $__af_lcf_counter + 1`
+    done
+}
+
+
+# af_set_property $1
+#
+# $1: property name followed by its value, separated by a space.
+#
+# Process a line of configuration.  Add it to the master list of variables, and set the variable to the value given, even when blank.
+#
+# TODO: Handle the case when a variable name is used twice.
+#   1) Could check to see if the value is already set, and through an error.
+#   2) Using the AF_CONFIG_KEYS and a variable count, multiple entries could exist. (Why?)
+#   3) Use the last value, but do not append to AF_CONFIG_KEYS.
+#
+af_set_property()
+{
+    # When reading from the configuration file, each line will come in as one parameter.
+    # So we need to treat this like everytime is one parameter, that contains the
+    # property and the value.
+    __af_sp_line="$*"
+    __af_sp_vname="`echo ${__af_sp_line} | awk '{print $1}'`"
+    __af_sp_vval="`echo ${__af_sp_line} | sed -e 's/^[0-9a-zA-Z_]*[ ]*//'`"
+
+    # Validate variable name.
+    if [ -z "`echo ${__af_sp_vname} | egrep '^[0-9a-zA-Z][0-9a-zA-Z_]*$'`" ] ; then
+	`handle_exception $? "" "af_set_property - Property invalid : ${__af_sp_line}."`
+    fi
+
+    # Process the configration from the file.
+    if af_is_debug ; then log_msg "" "af_set_property - var : ${__af_sp_vname}; value : ${__af_sp_vval}"; fi
+
+    # We don't want a variable collision.  So rename the variable name, slightly.
+    __af_sp_vname="${__AF_KEY_PREFIX}${__af_sp_vname}"
+
+    # Add to the list of keys
+    eval ${__af_sp_vname}=\"${__af_sp_vval}\"
+    `handle_exception $? "" "af_set_property - Failed to evaluate property : ${__af_sp_line}."`
+
+    AF_CONFIG_KEYS="${AF_CONFIG_KEYS} ${__af_sp_vname}"
+    export AF_CONFIG_KEYS
+}
+
+
+# Return all the property keys so that the properties can be searched through.
+af_get_property_keys()
+{
+    echo "${AF_CONFIG_KEYS}"
+}
+
+# Returns a previously set property.
+# TODO: make more robust?
+af_get_property_value()
+{
+    eval echo \"\$${__AF_KEY_PREFIX}$1\"
+}
+
+
+
+####
+# General functions
+####
+# These function are more general so that it is "easier" to change by later modules.
+#
+
+
+# log_msg $1 $2
+#
+# This function controls how messages are logged from the script.
+#
+# $1: type of message
+# $2: message
+#
+# In the default carnation, the logger just sends messages to the user.
+log_msg()
+{
+    if [ -z "$1" ] ; then
+        echo "$2"
+    else
+        echo "$1: $2"
+    fi
+}
+
+
+
+# handle_exception $1 $2 $3
+#
+# This function handles error / return codes from returning functions or scripts.
+# Using this should cause the script to act like a stack trace or stack dump.
+# This function should be called in the form:
+#
+#    `handle_exception $1 $2 $3`
+#
+# $1: return code / exit code to check.  0 will cause the function to do nothing.
+# $2: type of message
+# $3: error message.  Message should only be displayed when $1 is greater than 0.
+#
+handle_exception()
+{
+    if [ -n "$1" -a 0 -ne "$1" ] ; then
+	log_msg "$2" "$3" 1>&2
+	echo "return $1"
+    fi
+}
