@@ -36,11 +36,14 @@ If you wish to see the script handle a failure from a module called by the
 framework, edit aarons_foo.conf by changing these lines : 
 
 `step4   function afm_start_it2 valid_parameter`
-;step4  function afm_start_it2`
+
+`;step4  function afm_start_it2`
 
 to
 
 `;step4   function afm_start_it2 valid_parameter`
+
 `step4  function afm_start_it2`
 
 afm_start_it2 will fail if no parameter is supplied.
+
